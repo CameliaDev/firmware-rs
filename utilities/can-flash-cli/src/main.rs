@@ -36,7 +36,7 @@ struct CanFlash {
     #[arg(long)]
     ecu: Option<String>,
     /// Application ELF; extensionless Cargo outputs are supported.
-    #[arg(long, conflicts_with_all = ["package", "bin"])]
+    #[arg(long, conflicts_with_all = ["package", "bin", "debug", "release"])]
     elf: Option<PathBuf>,
     /// Cargo package to flash when running from a workspace root.
     #[arg(short, long)]
@@ -44,6 +44,12 @@ struct CanFlash {
     /// Binary to flash when the package provides multiple binaries.
     #[arg(long)]
     bin: Option<String>,
+    /// Select an ELF from the debug build directory.
+    #[arg(long, conflicts_with = "release")]
+    debug: bool,
+    /// Select an ELF from the release build directory.
+    #[arg(long)]
+    release: bool,
     /// Skip requesting entry when the ECU is already in the bootloader.
     #[arg(long)]
     already_in_bootloader: bool,
@@ -109,6 +115,7 @@ fn find_elf(
     metadata: &serde_json::Value,
     package: &serde_json::Value,
     binary_name: Option<&str>,
+    profile: Option<&str>,
 ) -> Result<PathBuf> {
     let targets = package["targets"]
         .as_array()
@@ -133,13 +140,24 @@ fn find_elf(
             .as_str()
             .context("missing Cargo target directory")?,
     );
-    // Cargo stores release binaries directly or below a target triple directory.
-    let mut candidates = vec![target.join("release").join(name)];
+    let profiles: &[&str] = match profile {
+        Some("debug") => &["debug"],
+        Some("release") => &["release"],
+        Some(_) => bail!("unsupported build profile"),
+        None => &["debug", "release"],
+    };
+    // Cargo stores binaries directly or below a target triple directory.
+    let mut candidates: Vec<_> = profiles
+        .iter()
+        .map(|profile| target.join(profile).join(name))
+        .collect();
     if target.is_dir() {
         for entry in std::fs::read_dir(&target)? {
             let entry = entry?;
             if entry.file_type()?.is_dir() {
-                candidates.push(entry.path().join("release").join(name));
+                for profile in profiles {
+                    candidates.push(entry.path().join(profile).join(name));
+                }
             }
         }
     }
@@ -149,10 +167,16 @@ fn find_elf(
     match candidates.as_slice() {
         [path] => Ok(path.clone()),
         [] => bail!(
-            "no release ELF found for {name}; build the application normally first, or pass --elf"
+            "no {} ELF found for {name}; build the application first, or pass --elf",
+            profile.unwrap_or("debug or release")
         ),
         _ => bail!(
-            "multiple release binaries found; select one with --elf:\n{}",
+            "multiple binaries found; {}:\n{}",
+            if profile.is_some() {
+                "select one with --elf"
+            } else {
+                "select --debug or --release, or specify --elf"
+            },
             candidates
                 .iter()
                 .map(|p| p.display().to_string())
@@ -199,7 +223,14 @@ fn flash(args: CanFlash) -> Result<()> {
         Some(path) => path.clone(),
         None => {
             let (metadata, package) = project.as_ref().context("missing Cargo project")?;
-            find_elf(metadata, package, args.bin.as_deref())?
+            let profile = if args.debug {
+                Some("debug")
+            } else if args.release {
+                Some("release")
+            } else {
+                None
+            };
+            find_elf(metadata, package, args.bin.as_deref(), profile)?
         }
     };
     let url = endpoint(args.host)?;
@@ -424,6 +455,8 @@ mod tests {
                 elf: Some(path.clone()),
                 package: None,
                 bin: None,
+                debug: false,
+                release: false,
                 already_in_bootloader: true,
                 timeout: 5,
             });

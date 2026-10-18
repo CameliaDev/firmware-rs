@@ -8,3 +8,9 @@ lis2mdl-rs = "2.0.0"
 embedded-hal-async.workspace = true
 defmt.workspace = true
 st-mems-bus = "2.0.0"
+
+
+
+
+
+

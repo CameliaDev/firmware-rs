@@ -259,8 +259,13 @@ fn flash(args: CanFlash) -> Result<()> {
         ecu.to_ascii_uppercase(),
         elf.display()
     );
+    let mut request = client.post(url).multipart(form).build()?;
+    // Buffer the upload so an early HTTP rejection is not masked by a closed body channel.
+    if let Some(body) = request.body_mut() {
+        body.buffer().context("cannot prepare firmware upload")?;
+    }
     // Do not retry: a lost response does not mean the flash operation failed.
-    let response = client.post(url).multipart(form).send().context(
+    let response = client.execute(request).context(
         "Server request failed; the ECU may still be flashing. Check server status before retrying",
     )?;
     let status = response.status();
@@ -280,15 +285,14 @@ fn flash(args: CanFlash) -> Result<()> {
     response
         .take(16 * 1024)
         .read_to_string(&mut body)
-        .context("cannot read server result; check server status before retrying")?;
-    if status == StatusCode::CONFLICT {
-        bail!("CAN interface busy: {}", body.trim());
+        .with_context(|| {
+            format!(
+                "Server returned {status}, but its response body could not be read; check server status before retrying"
+            )
+        })?;
+    if status != StatusCode::OK {
+        bail!("{}", http_error_message(status, &body));
     }
-    ensure!(
-        status == StatusCode::OK,
-        "Server returned {status}: {}",
-        body.trim()
-    );
     println!(
         "{}",
         if body.trim().is_empty() {
@@ -298,6 +302,15 @@ fn flash(args: CanFlash) -> Result<()> {
         }
     );
     Ok(())
+}
+
+fn http_error_message(status: StatusCode, body: &str) -> String {
+    let message = body.trim();
+    if message.is_empty() {
+        format!("HTTP {status}")
+    } else {
+        message.to_owned()
+    }
 }
 
 fn display_progress(response: impl Read, elf: &std::path::Path) -> Result<()> {
@@ -404,6 +417,111 @@ mod tests {
         ] {
             assert!(endpoint(Url::parse(url).unwrap()).is_err());
         }
+    }
+
+    #[test]
+    fn http_errors_show_message_once_and_handle_empty_responses() {
+        for (status, body, expected) in [
+            (
+                StatusCode::CONFLICT,
+                " CAN interface is busy\n",
+                "CAN interface is busy",
+            ),
+            (
+                StatusCode::BAD_REQUEST,
+                "invalid firmware",
+                "invalid firmware",
+            ),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Cannot open can0",
+                "Cannot open can0",
+            ),
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                " \n",
+                "HTTP 500 Internal Server Error",
+            ),
+        ] {
+            assert_eq!(http_error_message(status, body), expected);
+        }
+    }
+
+    #[test]
+    fn early_http_rejections_preserve_server_message() {
+        let path =
+            std::env::temp_dir().join(format!("can-flash-cli-early-test-{}", std::process::id()));
+        let mut file = File::create(&path).unwrap();
+        file.write_all(b"\x7fELF").unwrap();
+        file.set_len(8 * 1024 * 1024).unwrap();
+        drop(file);
+
+        for (status, message, expected) in [
+            (
+                "409 Conflict",
+                "CAN interface is busy",
+                "CAN interface is busy",
+            ),
+            (
+                "413 Payload Too Large",
+                "upload too large",
+                "upload too large",
+            ),
+            (
+                "401 Unauthorized",
+                "authentication required",
+                "authentication required",
+            ),
+            (
+                "500 Internal Server Error",
+                "server failed",
+                "server failed",
+            ),
+        ] {
+            let listener = TcpListener::bind(("localhost", 0)).unwrap();
+            let host = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+            let worker =
+                thread::spawn(move || {
+                    let (mut socket, _) = listener.accept().unwrap();
+                    socket
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut reader = BufReader::new(socket.try_clone().unwrap());
+                    // Reject after the headers, while the large upload is still in progress.
+                    loop {
+                        let mut line = String::new();
+                        assert!(reader.read_line(&mut line).unwrap() > 0);
+                        if line == "\r\n" {
+                            break;
+                        }
+                    }
+                    write!(socket,
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{message}",
+                    message.len()
+                ).unwrap();
+                    socket.shutdown(std::net::Shutdown::Write).unwrap();
+                    // Drain already-sent bytes to avoid a TCP reset hiding the HTTP response.
+                    let _ = io::copy(&mut reader, &mut io::sink());
+                });
+            let error = flash(CanFlash {
+                host,
+                ecu: Some("bms".into()),
+                elf: Some(path.clone()),
+                package: None,
+                bin: None,
+                debug: false,
+                release: false,
+                already_in_bootloader: true,
+                timeout: 5,
+            })
+            .unwrap_err();
+            worker.join().unwrap();
+            let error = format!("{error:#}");
+            assert_eq!(error, expected);
+            assert!(error.contains(message), "{error}");
+            assert!(!error.contains("receiver is gone"), "{error}");
+        }
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

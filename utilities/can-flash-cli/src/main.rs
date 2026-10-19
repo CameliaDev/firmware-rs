@@ -384,7 +384,6 @@ fn display_progress(response: impl Read, elf: &std::path::Path) -> Result<()> {
     }
 }
 
-// The server currently sends text errors, so retain known protocol details without wrappers.
 fn format_error(error: &anyhow::Error) -> String {
     let details = format!("{error:#}");
     let lower = details.to_ascii_lowercase();
@@ -430,73 +429,10 @@ fn format_error(error: &anyhow::Error) -> String {
     if lower.contains("cannot open") && lower.contains("failed to open can interface") {
         return "Cannot open the CAN interface. Check the server's interface configuration.".into();
     }
-    if lower.contains("firmware is larger than the application region") {
-        return "Firmware does not fit in the application flash region.".into();
-    }
-    if lower.contains("bootloader returned crc") {
-        let message = details
-            .split(": ")
-            .find(|part| part.starts_with("bootloader returned CRC"))
-            .unwrap_or("CRC mismatch");
-        return format!("Firmware verification failed: {message}.");
-    }
-    if lower.contains("elf")
-        && (lower.contains("invalid")
-            || lower.contains("must be")
-            || lower.contains("too short")
-            || lower.contains("not arm")
-            || lower.contains("outside file")
-            || lower.contains("overflow")
-            || lower.contains("only 32-bit")
-            || lower.contains("only little-endian"))
-    {
-        return "Invalid firmware file. Select a valid ELF.".into();
-    }
-    let message = details.strip_prefix("Flash failed: ").unwrap_or(&details);
-    let parts: Vec<_> = message.split(": ").collect();
-    let leaf = parts.last().copied().unwrap_or(message);
-    if let Some(command) = leaf.strip_prefix("timed out waiting for ACK to command ") {
-        let attempts = parts
-            .iter()
-            .find_map(|part| part.split_once(" failed after ").map(|(_, n)| n));
-        return match attempts {
-            Some(attempts) => format!("No ACK for command {command} after {attempts}."),
-            None => format!("No ACK for command {command}."),
-        };
-    }
-    if let Some(command) = leaf.strip_prefix("timed out waiting for response to command ") {
-        return format!("No response to command {command}.");
-    }
-    if leaf == "write block timed out" {
-        return "Firmware write block timed out.".into();
-    }
-    if let Some(attempts) = leaf.strip_prefix("write block rejected after ") {
-        return format!("Firmware write rejected after {attempts}.");
-    }
-    if leaf.starts_with("failed to enter bootloader after ")
-        || leaf.starts_with("bootloader rejected command ")
-        || leaf.starts_with("write packet sequence ")
-        || leaf.starts_with("timed out waiting for initial WRITE_MEMORY ACK")
-        || leaf.starts_with("timed out waiting for final WRITE_MEMORY ACK")
-        || leaf.starts_with("firmware starts at ")
-        || leaf.starts_with("firmware is linked at ")
-        || leaf.starts_with("firmware vector table ")
-        || leaf.starts_with("firmware does not contain ")
-        || leaf.starts_with("conflicting firmware bytes ")
-    {
-        let mut chars = leaf.chars();
-        return format!(
-            "{}{}.",
-            chars.next().unwrap().to_uppercase(),
-            chars.as_str().trim_end_matches('.')
-        );
-    }
     if lower.contains("upload timed out") {
         return "Firmware upload timed out.".into();
     }
-    if details.starts_with("Flash failed:")
-        || details.starts_with("HTTP ")
-        || lower.contains("server progress event")
+    if lower.contains("server progress event")
         || lower.starts_with("missing firmware ")
         || lower.starts_with("missing progress ")
         || lower.starts_with("missing completion ")
@@ -541,50 +477,30 @@ mod tests {
                 "Could not send data over CAN.",
             ),
             (
-                "Flash failed: start-update failed after 3 attempts: timed out waiting for ACK to command 0xA9",
-                "No ACK for command 0xA9 after 3 attempts.",
-            ),
-            (
-                "Flash failed: bootloader rejected command 0xA5",
-                "Bootloader rejected command 0xA5.",
-            ),
-            (
-                "Flash failed: write block rejected after 3 attempts",
-                "Firmware write rejected after 3 attempts.",
-            ),
-            (
-                "Flash failed: failed to enter bootloader after 3 attempts",
-                "Failed to enter bootloader after 3 attempts.",
-            ),
-            (
-                "Flash failed: write block timed out",
-                "Firmware write block timed out.",
-            ),
-            (
-                "Flash failed: bootloader returned CRC 0x12345678; expected 0x87654321",
-                "Firmware verification failed: bootloader returned CRC 0x12345678; expected 0x87654321.",
-            ),
-            (
-                "firmware is larger than the application region",
-                "Firmware does not fit in the application flash region.",
-            ),
-            (
-                "ELF is not ARM",
-                "Invalid firmware file. Select a valid ELF.",
-            ),
-            (
                 "progress stream ended without a result; check server status before retrying",
                 "Connection lost. Check ECU status before retrying.",
-            ),
-            (
-                "Flash failed: unexpected internal error",
-                "Flashing failed.",
             ),
         ] {
             assert_eq!(format_error(&anyhow::anyhow!(details)), expected);
         }
         let error = anyhow::anyhow!("file does not exist").context("cannot open firmware.elf");
         assert_eq!(format_error(&error), "cannot open firmware.elf");
+    }
+
+    #[test]
+    fn server_errors_pass_through() {
+        for message in [
+            "Flash failed: get-status failed after 3 attempts: timed out waiting for ACK to command 0xA2",
+            "Flash failed: bootloader rejected command 0xA5",
+            "Flash failed: write block timed out",
+            "Flash failed: bootloader returned CRC 0x12345678; expected 0x87654321",
+            "firmware is larger than the application region",
+            "ELF is not ARM",
+            "Flash failed: unexpected internal error",
+            "HTTP 500 Internal Server Error",
+        ] {
+            assert_eq!(format_error(&anyhow::anyhow!(message)), message);
+        }
     }
 
     #[test]

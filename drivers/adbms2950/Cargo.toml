@@ -1,0 +1,19 @@
+[package]
+name = "adbms2950"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+# Feature that implements `defmt::Format` for the public types this driver provides in its API.
+defmt = ["dep:defmt", "embassy-time/defmt", "embedded-hal-async/defmt-03"]
+
+[dependencies]
+bitfield-struct.workspace = true
+defmt = { workspace = true, optional = true }
+embedded-hal-async.workspace = true
+embassy-time.workspace = true
+adbms-register-macros = { path = "../adbms-register-macros" }
+
+[lints]
+workspace = true

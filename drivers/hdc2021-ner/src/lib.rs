@@ -72,7 +72,6 @@ where
 
     /// Read the manufacture ID of the sensor. This can be used to verify that the sensor is present and responding correctly.
     /// the address register is incremented automatically by the sensor, so we can read both bytes in one transaction.
-
     /// The manufacturer ID is a 16-bit value, with the low byte at register 0xFC and the high byte at register 0xFD. The expected value for the HDC2021 is 0x5449 (ASCII "TI").
     pub async fn manufacturer_id(&mut self) -> Result<u16, Error<E>> {
         self.read_u16(register::MANUFACTURER_ID_LOW).await
@@ -89,15 +88,15 @@ where
     // mode or continuous measurements in continuous conversion
     // mode. This bit self-clears to 0 once the measurement starts
 
-    /// The measurement is complete when the DRDY bit in the status register is set to 1. The maximum time for a
+    // The measurement is complete when the DRDY bit in the status register is set to 1. The maximum time for a
     pub async fn device_id(&mut self) -> Result<u16, Error<E>> {
         self.read_u16(register::DEVICE_ID_LOW).await
     }
 
-    /// Trigger a measurement and wait for it to complete, then read the result. This function will block until the measurement is complete or a timeout occurs.
+    // Trigger a measurement and wait for it to complete, then read the result. This function will block until the measurement is complete or a timeout occurs.
     pub async fn measure(&mut self, delay: &mut impl DelayNs) -> Result<Measurement, Error<E>> {
         self.trigger_measurement().await?;
-        /// Wait for the measurement to complete by polling the DRDY bit in the status register. The maximum time for a measurement is 6.5ms, so we will poll for a maximum of 10 attempts with a 2ms delay between each attempt.
+        // Wait for the measurement to complete by polling the DRDY bit in the status register. The maximum time for a measurement is 6.5ms, so we will poll for a maximum of 10 attempts with a 2ms delay between each attempt.
         for _ in 0..DRDY_POLL_ATTEMPTS {
             delay.delay_ms(DRDY_POLL_INTERVAL_MS).await;
             if self.read_u8(register::DRDY_STATUS).await? & register::DRDY_BIT != 0 {
@@ -107,7 +106,7 @@ where
         Err(Error::Timeout)
     }
 
-    /// Enable or disable the internal heater. The heater can be used to prevent condensation on the sensor in high humidity environments. It is recommended to use the heater only when necessary, as it will increase power consumption and may affect measurement accuracy.
+    // Enable or disable the internal heater. The heater can be used to prevent condensation on the sensor in high humidity environments. It is recommended to use the heater only when necessary, as it will increase power consumption and may affect measurement accuracy.
     pub async fn toggle_heater(&mut self, enable: bool) -> Result<(), Error<E>> {
         let mut config = self.read_u8(register::DEVICE_CONFIG).await?;
         if enable {
@@ -123,7 +122,7 @@ where
             .await
     }
 
-    /// Read the temperature and humidity measurement from the sensor. This function assumes that a measurement has already been triggered and completed.
+    // Read the temperature and humidity measurement from the sensor. This function assumes that a measurement has already been triggered and completed.
     pub async fn read_measurement(&mut self) -> Result<Measurement, Error<E>> {
         let mut buf = [0u8; 4];
         self.i2c
@@ -137,7 +136,7 @@ where
         })
     }
 
-    /// Read a single byte from the given register
+    // Read a single byte from the given register
     async fn read_u8(&mut self, reg: u8) -> Result<u8, Error<E>> {
         let mut buf = [0u8; 1];
         self.i2c
@@ -147,7 +146,7 @@ where
         Ok(buf[0])
     }
 
-    /// Read a 16-bit value from the given register (little-endian)
+    // Read a 16-bit value from the given register (little-endian)
     async fn read_u16(&mut self, reg_low: u8) -> Result<u16, Error<E>> {
         let mut buf = [0u8; 2];
         self.i2c
@@ -157,7 +156,7 @@ where
         Ok(u16::from_le_bytes(buf))
     }
 
-    /// Write a single byte to the given register
+    // Write a single byte to the given register
     async fn write_u8(&mut self, reg: u8, value: u8) -> Result<(), Error<E>> {
         self.i2c
             .write(self.address as u8, &[reg, value])

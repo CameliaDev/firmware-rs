@@ -23,3 +23,7 @@ suspicious = { level = "deny", priority = -1 }
 perf = { level = "deny", priority = -1 }
 disallowed_types = "deny"
 default_numeric_fallback = "warn"
+
+# to fix the bisync error for lis2mdl-driver
+[patch.crates-io]
+bisync = { git = "https://github.com/JM4ier/bisync", rev = "be3a0a6" }

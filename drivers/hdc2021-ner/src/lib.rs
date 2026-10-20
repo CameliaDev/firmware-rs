@@ -5,25 +5,20 @@
 // this makes them eternally portable yet still easy to use from embassy
 // therefore, no import should EVER mention
 
-
-
 use embedded_hal_async::{delay::DelayNs, i2c::I2c};
-
-
-
 
 #[derive(Debug, Clone, Copy)]
 pub enum Address {
-    /// the ADDR is recommended not to be left 
+    /// the ADDR is recommended not to be left
     /// floating if the device is to be used in noisy environment.
     Low = 0x40,
     High = 0x41,
 }
 
-pub const MANUFACTURER_ID: u16 = 0x5449; 
+pub const MANUFACTURER_ID: u16 = 0x5449;
 const DRDY_POLL_ATTEMPTS: u8 = 10;
 const DRDY_POLL_INTERVAL_MS: u32 = 2; // 2ms,
- 
+
 /// register addresses
 mod register {
     pub const TEMP_LOW: u8 = 0x00;
@@ -45,7 +40,6 @@ mod register {
 /// Errors
 #[derive(Debug, defmt::Format)]
 pub enum Error<E> {
-
     // I2C bus error
     I2c(E),
     Timeout,
@@ -55,7 +49,7 @@ pub enum Error<E> {
 #[derive(Debug, Clone, Copy, defmt::Format)]
 pub struct Measurement {
     // Temperature in degrees celsius
-    pub temperature: f32, 
+    pub temperature: f32,
     // Relative humidity as a percentage (0-100)
     pub humidity: f32,
 }
@@ -67,7 +61,6 @@ pub struct Hdc2021<I2C> {
     address: Address,
 }
 
-
 impl<I2C, E> Hdc2021<I2C>
 where
     I2C: I2c<Error = E>,
@@ -77,29 +70,26 @@ where
         Self { i2c, address }
     }
 
+    /// Read the manufacture ID of the sensor. This can be used to verify that the sensor is present and responding correctly.
+    /// the address register is incremented automatically by the sensor, so we can read both bytes in one transaction.
 
-
-/// Read the manufacture ID of the sensor. This can be used to verify that the sensor is present and responding correctly.
-/// the address register is incremented automatically by the sensor, so we can read both bytes in one transaction.
-
-/// The manufacturer ID is a 16-bit value, with the low byte at register 0xFC and the high byte at register 0xFD. The expected value for the HDC2021 is 0x5449 (ASCII "TI").
+    /// The manufacturer ID is a 16-bit value, with the low byte at register 0xFC and the high byte at register 0xFD. The expected value for the HDC2021 is 0x5449 (ASCII "TI").
     pub async fn manufacturer_id(&mut self) -> Result<u16, Error<E>> {
         self.read_u16(register::MANUFACTURER_ID_LOW).await
     }
 
-// When a measurement is
-// triggered, the HDC2021 switches to measurement mode that converts temperature or humidity values from
-// integrated sensors through an internal ADC and stores the information in their respective data registers. 
+    // When a measurement is
+    // triggered, the HDC2021 switches to measurement mode that converts temperature or humidity values from
+    // integrated sensors through an internal ADC and stores the information in their respective data registers.
 
+    // Measurement trigger:
+    // 0: No action
+    // 1: Start measurement
+    // Setting this bit to 1 to start a single measurement in one-shot
+    // mode or continuous measurements in continuous conversion
+    // mode. This bit self-clears to 0 once the measurement starts
 
-// Measurement trigger:
-// 0: No action
-// 1: Start measurement
-// Setting this bit to 1 to start a single measurement in one-shot
-// mode or continuous measurements in continuous conversion
-// mode. This bit self-clears to 0 once the measurement starts
-
-/// The measurement is complete when the DRDY bit in the status register is set to 1. The maximum time for a
+    /// The measurement is complete when the DRDY bit in the status register is set to 1. The maximum time for a
     pub async fn device_id(&mut self) -> Result<u16, Error<E>> {
         self.read_u16(register::DEVICE_ID_LOW).await
     }
@@ -107,19 +97,17 @@ where
     /// Trigger a measurement and wait for it to complete, then read the result. This function will block until the measurement is complete or a timeout occurs.
     pub async fn measure(&mut self, delay: &mut impl DelayNs) -> Result<Measurement, Error<E>> {
         self.trigger_measurement().await?;
-       /// Wait for the measurement to complete by polling the DRDY bit in the status register. The maximum time for a measurement is 6.5ms, so we will poll for a maximum of 10 attempts with a 2ms delay between each attempt.
-        for _ in 0.. DRDY_POLL_ATTEMPTS {
+        /// Wait for the measurement to complete by polling the DRDY bit in the status register. The maximum time for a measurement is 6.5ms, so we will poll for a maximum of 10 attempts with a 2ms delay between each attempt.
+        for _ in 0..DRDY_POLL_ATTEMPTS {
             delay.delay_ms(DRDY_POLL_INTERVAL_MS).await;
             if self.read_u8(register::DRDY_STATUS).await? & register::DRDY_BIT != 0 {
                 return self.read_measurement().await;
             }
         }
-        Err(Error::Timeout) 
+        Err(Error::Timeout)
     }
 
-
-
-/// Enable or disable the internal heater. The heater can be used to prevent condensation on the sensor in high humidity environments. It is recommended to use the heater only when necessary, as it will increase power consumption and may affect measurement accuracy.
+    /// Enable or disable the internal heater. The heater can be used to prevent condensation on the sensor in high humidity environments. It is recommended to use the heater only when necessary, as it will increase power consumption and may affect measurement accuracy.
     pub async fn toggle_heater(&mut self, enable: bool) -> Result<(), Error<E>> {
         let mut config = self.read_u8(register::DEVICE_CONFIG).await?;
         if enable {
@@ -131,18 +119,18 @@ where
     }
 
     async fn trigger_measurement(&mut self) -> Result<(), Error<E>> {
-        self.write_u8(register::MEASURE_CONFIG, register::MEASURE_TRIG).await
+        self.write_u8(register::MEASURE_CONFIG, register::MEASURE_TRIG)
+            .await
     }
 
-
-/// Read the temperature and humidity measurement from the sensor. This function assumes that a measurement has already been triggered and completed.
+    /// Read the temperature and humidity measurement from the sensor. This function assumes that a measurement has already been triggered and completed.
     pub async fn read_measurement(&mut self) -> Result<Measurement, Error<E>> {
         let mut buf = [0u8; 4];
         self.i2c
             .write_read(self.address as u8, &[register::TEMP_LOW], &mut buf)
             .await
             .map_err(Error::I2c)?;
-        
+
         Ok(Measurement {
             temperature: convert_temperature(u16::from_le_bytes([buf[0], buf[1]])),
             humidity: convert_humidity(u16::from_le_bytes([buf[2], buf[3]])),
@@ -169,7 +157,6 @@ where
         Ok(u16::from_le_bytes(buf))
     }
 
-
     /// Write a single byte to the given register
     async fn write_u8(&mut self, reg: u8, value: u8) -> Result<(), Error<E>> {
         self.i2c
@@ -177,7 +164,6 @@ where
             .await
             .map_err(Error::I2c)
     }
-    
 }
 const fn convert_temperature(raw: u16) -> f32 {
     // (temp/2^8)*165.0-40.0 -> 8-bits, for 16-bits, use 2^16 instead of 2^8
@@ -186,9 +172,5 @@ const fn convert_temperature(raw: u16) -> f32 {
 
 const fn convert_humidity(raw: u16) -> f32 {
     // humidity*(100/2^8) -> 8-bits, for 16-bits, use 2^16 instead of 2^8
-    (raw as f32 / 65536.0) * 100.0 
+    (raw as f32 / 65536.0) * 100.0
 }
-
-
-
-

@@ -2,7 +2,8 @@
 
 use bitfield_struct::bitfield;
 use cangen_macro::generate_all_messages;
-use embedded_can::{ExtendedId, Frame, Id, StandardId};
+use embedded_can::{ExtendedId, StandardId};
+pub use embedded_can::{Frame, Id};
 
 mod sealed {
     pub trait Sealed {}
@@ -13,67 +14,63 @@ mod sealed {
 }
 
 pub trait CanRepr: sealed::Sealed + Copy {
-    type Bytes: AsRef<[u8]>;
+    type Bytes: AsRef<[u8]> + AsMut<[u8]> + Default;
     fn to_be_bytes(self) -> Self::Bytes;
+    fn from_be_bytes(bytes: Self::Bytes) -> Self;
 }
 
-impl CanRepr for u8 {
-    type Bytes = [u8; 1];
-    fn to_be_bytes(self) -> Self::Bytes {
-        u8::to_be_bytes(self)
-    }
+macro_rules! impl_can_repr {
+    ($($t:ty),*) => {$(
+        impl CanRepr for $t {
+            type Bytes = [u8; core::mem::size_of::<$t>()];
+            fn to_be_bytes(self) -> Self::Bytes { <$t>::to_be_bytes(self) }
+            fn from_be_bytes(b: Self::Bytes) -> Self { <$t>::from_be_bytes(b) }
+        }
+    )*};
 }
-impl CanRepr for u16 {
-    type Bytes = [u8; 2];
-    fn to_be_bytes(self) -> Self::Bytes {
-        u16::to_be_bytes(self)
-    }
-}
-impl CanRepr for u32 {
-    type Bytes = [u8; 4];
-    fn to_be_bytes(self) -> Self::Bytes {
-        u32::to_be_bytes(self)
-    }
-}
-impl CanRepr for u64 {
-    type Bytes = [u8; 8];
-    fn to_be_bytes(self) -> Self::Bytes {
-        u64::to_be_bytes(self)
-    }
-}
+impl_can_repr!(u8, u16, u32, u64);
 
 /// Creates a CAN frame
 /// All the users have to do is specify `Repr`, `ID`, and `LEN`
-pub trait ToCanFrame: Sized + Into<Self::Repr> {
+/// Describes a CAN message's identity and layout. Implemented once per message.
+pub trait CanMessage: Sized {
     type Repr: CanRepr;
 
     const ID: Id;
     const LEN: usize;
 
     #[doc(hidden)]
-    /// a hack to ensure that the `Repr` is specified correctly
-    const CHECK_BITS_FIT: () = assert!(
-        Self::LEN <= core::mem::size_of::<Self::Repr>(),
-        "BITS exceeds the backing integer's width"
-    );
+    const CHECK: () = {
+        assert!(
+            Self::LEN <= core::mem::size_of::<Self::Repr>(),
+            "LEN exceeds Repr"
+        );
+        assert!(Self::LEN <= 8, "LEN exceeds the 8-byte CAN 2.0 limit");
+    };
+}
 
-    #[doc(hidden)]
-    /// a hack to ensure that the `Repr` and `LEN` are 8 bytes or less (CAN 2.0)
-    const CHECK_LEN: () = assert!(
-        Self::LEN <= 8 && core::mem::size_of::<Self::Repr>() <= 8,
-        "BITS exceeds the backing integer's width"
-    );
-
+pub trait ToCanFrame: CanMessage + Into<<Self as CanMessage>::Repr> {
     fn to_can_frame<F: Frame>(self) -> F {
-        // Default assoc consts are only evaluated when referenced, so these
-        // force the compile-time bounds check
-        let _: () = Self::CHECK_BITS_FIT;
-        let _: () = Self::CHECK_LEN;
+        let _: () = Self::CHECK;
 
-        let bytes = self.into().to_be_bytes();
-        // this is guarranteed in bounds by the `CHECK_BITS_FIT`
-        // SAFETY: this is guarranteed to be within the size of a CAN frame by `CHECK_LEN`
-        unsafe { F::new(Self::ID, &bytes.as_ref()[..Self::LEN]).unwrap_unchecked() }
+        let repr: <Self as CanMessage>::Repr = self.into();
+        let bytes = repr.to_be_bytes();
+        F::new(Self::ID, &bytes.as_ref()[..Self::LEN]).expect("frame construction failed")
+    }
+}
+
+pub trait FromCanFrame: CanMessage + From<<Self as CanMessage>::Repr> {
+    fn from_can_frame<F: Frame>(frame: &F) -> Option<Self> {
+        let _: () = Self::CHECK;
+
+        if frame.is_remote_frame() || frame.id() != Self::ID || frame.data().len() != Self::LEN {
+            return None;
+        }
+        let mut bytes = <<Self as CanMessage>::Repr as CanRepr>::Bytes::default();
+        bytes.as_mut()[..Self::LEN].copy_from_slice(frame.data());
+        Some(Self::from(
+            <<Self as CanMessage>::Repr as CanRepr>::from_be_bytes(bytes),
+        ))
     }
 }
 
@@ -98,6 +95,17 @@ pub struct OutOfRange {
 /// - `B` is the field width in bits (used for masking / sign-extension only).
 /// - `ARG` is the formatter argument (the divisor or multiplier).
 pub mod conv {
+    pub fn read_be(data: &[u8], len: usize, repr_bytes: usize) -> Option<u64> {
+        if data.len() != len {
+            return None;
+        }
+        let mut v = 0u64;
+        for &b in data {
+            v = (v << 8_i32) | b as u64;
+        }
+        Some(v << (8 * (repr_bytes - len)))
+    }
+
     macro_rules! scaled {
         ($u:ty, $i:ty, $w:literal,
          $div_from:ident, $div_into:ident, $mul_from:ident, $mul_into:ident,
@@ -238,7 +246,7 @@ pub mod conv {
     );
 }
 
-impl ToCanFrame for ExampleDoNotUse {
+impl CanMessage for ExampleDoNotUse {
     type Repr = u64;
     const ID: Id = Id::Standard(StandardId::new(0x00).unwrap());
     const LEN: usize = 6;

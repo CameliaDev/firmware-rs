@@ -62,7 +62,7 @@ use embassy_stm32::can::filter::{
 use embassy_stm32::can::{CanConfigurator, CanRx, CanTx, Frame, Properties};
 use embassy_sync::channel::{DynamicReceiver, DynamicSender, TrySendError};
 use embassy_time::Timer;
-use embedded_can::{ExtendedId, StandardId};
+use embedded_can::Id;
 
 use heapless::Vec;
 
@@ -94,9 +94,9 @@ pub struct StdFilter {
     /// Message RAM slot this filter occupies.
     pub slot: StandardFilterSlot,
     /// First id to match.
-    pub id1: u16,
+    pub id1: Id,
     /// Optional second id to match.
-    pub id2: Option<u16>,
+    pub id2: Option<Id>,
 }
 
 /// An extended (29-bit) CAN filter, declared independently of the peripheral.
@@ -108,9 +108,9 @@ pub struct ExtFilter {
     /// Message RAM slot this filter occupies.
     pub slot: ExtendedFilterSlot,
     /// First id to match.
-    pub id1: u32,
+    pub id1: Id,
     /// Optional second id to match.
-    pub id2: Option<u32>,
+    pub id2: Option<Id>,
 }
 
 pub struct NerCan {
@@ -164,16 +164,21 @@ impl NerCan {
             }
 
             let mut std = StandardFilter::default();
-            match filter.id2 {
-                Some(id2) => {
-                    std.filter = DedicatedDual(
-                        StandardId::new(filter.id1).unwrap(),
-                        StandardId::new(id2).unwrap(),
-                    );
+            if let Id::Standard(id1) = filter.id1 {
+                match filter.id2 {
+                    Some(id2) => {
+                        if let Id::Standard(id2) = id2 {
+                            std.filter = DedicatedDual(id1, id2);
+                        } else {
+                            panic!("Provided extended ID message to id2");
+                        }
+                    }
+                    None => {
+                        std.filter = DedicatedSingle(id1);
+                    }
                 }
-                None => {
-                    std.filter = DedicatedSingle(StandardId::new(filter.id1).unwrap());
-                }
+            } else {
+                panic!("Provided extended ID message to id1");
             }
             std.action = Action::StoreInFifo0;
             self.can_configurator
@@ -199,16 +204,21 @@ impl NerCan {
             }
 
             let mut ext = ExtendedFilter::default();
-            match filter.id2 {
-                Some(id2) => {
-                    ext.filter = DedicatedDual(
-                        ExtendedId::new(filter.id1).unwrap(),
-                        ExtendedId::new(id2).unwrap(),
-                    );
+            if let Id::Extended(id1) = filter.id1 {
+                match filter.id2 {
+                    Some(id2) => {
+                        if let Id::Extended(id2) = id2 {
+                            ext.filter = DedicatedDual(id1, id2);
+                        } else {
+                            panic!("Provided standard ID message to id2");
+                        }
+                    }
+                    None => {
+                        ext.filter = DedicatedSingle(id1);
+                    }
                 }
-                None => {
-                    ext.filter = DedicatedSingle(ExtendedId::new(filter.id1).unwrap());
-                }
+            } else {
+                panic!("Provided standard ID message to id1");
             }
             ext.action = Action::StoreInFifo0;
             self.can_configurator

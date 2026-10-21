@@ -25,6 +25,9 @@ jobs:
       - name: Setup Rust
         uses: actions-rust-lang/setup-rust-toolchain@v2
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+
       - name: Run Rust Doc
         run: cargo doc --no-deps --workspace
 

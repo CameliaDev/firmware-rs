@@ -12,7 +12,7 @@ use embassy_stm32::flash::{Blocking, Flash, WRITE_SIZE};
 use embassy_stm32::peripherals::FLASH;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embedded_can::{Frame, Id, StandardId};
+use embedded_can::{Frame, Id};
 
 pub use embassy_boot_stm32::FirmwareUpdaterError;
 
@@ -20,25 +20,20 @@ pub use embassy_boot_stm32::FirmwareUpdaterError;
 // Offsets below are relative to the start of flash.
 const STATE_OFFSET: u32 = 0x001F_A000;
 const STATE_SIZE: u32 = 0x2000;
+const BOOT_REQUEST_DATA: &[u8] = &[0xB0, 0x07, 0x10, 0xAD];
 
 /// Own flash access for startup confirmation and persistent bootloader requests.
 pub struct Bootloader<'d> {
     flash: Mutex<NoopRawMutex, RefCell<Flash<'d, Blocking>>>,
-    request_id: StandardId,
-    request_data: &'static [u8],
+    request_id: Id,
 }
 
 impl<'d> Bootloader<'d> {
-    /// Configure an exact standard CAN data-frame match without initializing CAN.
-    /// Panics for an invalid 11-bit ID or a payload outside 1..=8 bytes.
-    pub fn new(flash: Peri<'d, FLASH>, request_id: u16, request_data: &'static [u8]) -> Self {
-        let request_id = StandardId::new(request_id).expect("Boot request ID must be 11-bit");
-        assert!(!request_data.is_empty() && request_data.len() <= 8);
-
+    /// Configure an exact CAN data-frame match without initializing CAN.
+    pub fn new(flash: Peri<'d, FLASH>, request_id: Id) -> Self {
         Self {
             flash: Mutex::new(RefCell::new(Flash::new_blocking(flash))),
             request_id,
-            request_data,
         }
     }
 
@@ -51,8 +46,8 @@ impl<'d> Bootloader<'d> {
     /// Check the ID, frame type, and complete payload before accepting a request.
     pub fn is_request(&self, frame: &impl Frame) -> bool {
         !frame.is_remote_frame()
-            && frame.id() == Id::Standard(self.request_id)
-            && frame.data() == self.request_data
+            && frame.id() == self.request_id
+            && frame.data() == BOOT_REQUEST_DATA
     }
 
     /// Ignore unrelated frames; persist a matching request and reset into the bootloader.

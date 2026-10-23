@@ -385,62 +385,56 @@ fn display_progress(response: impl Read, elf: &std::path::Path) -> Result<()> {
 }
 
 fn format_error(error: &anyhow::Error) -> String {
-    let details = format!("{error:#}");
-    let lower = details.to_ascii_lowercase();
-    if lower.contains("can interface is busy") || lower.contains("http 409") {
-        return "Server is busy. Try again when the current operation finishes.".into();
-    }
-    if lower.contains("progress connection lost")
-        || lower.contains("progress stream ended without a result")
-    {
-        return "Connection lost. Check ECU status before retrying.".into();
-    }
-    if lower.contains("response body could not be read") {
-        return error.to_string();
-    }
-    if let Some(request) = error
+    let details = format!("{error:#}").to_ascii_lowercase();
+    let request = error
         .chain()
-        .find_map(|cause| cause.downcast_ref::<reqwest::Error>())
+        .find_map(|cause| cause.downcast_ref::<reqwest::Error>());
+
+    if details.contains("can interface is busy") || details.contains("http 409") {
+        "Server is busy. Try again when the current operation finishes.".into()
+    } else if details.contains("progress connection lost")
+        || details.contains("progress stream ended without a result")
     {
-        if request.is_connect() {
-            if lower.contains("dns")
-                || lower.contains("failed to lookup address")
-                || lower.contains("name or service not known")
-            {
-                return "Cannot resolve server address.".into();
-            }
-            return "Cannot connect to server. Check the address and that the server is running."
-                .into();
-        }
-        if request.is_timeout() {
-            return "Server request timed out. Check ECU status before retrying.".into();
-        }
-        if lower.contains("server request failed") {
-            return "Connection lost. Check ECU status before retrying.".into();
-        }
-        return "Could not prepare the server request.".into();
-    }
-    if lower.contains("can") && lower.contains("network is down") {
-        return "CAN interface is down.".into();
-    }
-    if lower.contains("can transmit failed") {
-        return "Could not send data over CAN.".into();
-    }
-    if lower.contains("cannot open") && lower.contains("failed to open can interface") {
-        return "Cannot open the CAN interface. Check the server's interface configuration.".into();
-    }
-    if lower.contains("upload timed out") {
-        return "Firmware upload timed out.".into();
-    }
-    if lower.contains("server progress event")
-        || lower.starts_with("missing firmware ")
-        || lower.starts_with("missing progress ")
-        || lower.starts_with("missing completion ")
+        "Connection lost. Check ECU status before retrying.".into()
+    } else if details.contains("response body could not be read") {
+        error.to_string()
+    } else if let Some(request) = request {
+        request_error(request, &details).into()
+    } else if details.contains("can") && details.contains("network is down") {
+        "CAN interface is down.".into()
+    } else if details.contains("can transmit failed") {
+        "Could not send data over CAN.".into()
+    } else if details.contains("cannot open") && details.contains("failed to open can interface") {
+        "Cannot open the CAN interface. Check the server's interface configuration.".into()
+    } else if details.contains("upload timed out") {
+        "Firmware upload timed out.".into()
+    } else if details.contains("server progress event")
+        || details.starts_with("missing firmware ")
+        || details.starts_with("missing progress ")
+        || details.starts_with("missing completion ")
     {
-        return "Flashing failed.".into();
+        "Flashing failed.".into()
+    } else {
+        error.to_string()
     }
-    // Local selection and file errors already explain how to correct the command.
-    error.to_string()
+}
+
+fn request_error(error: &reqwest::Error, details: &str) -> &'static str {
+    if error.is_connect()
+        && (details.contains("dns")
+            || details.contains("failed to lookup address")
+            || details.contains("name or service not known"))
+    {
+        "Cannot resolve server address."
+    } else if error.is_connect() {
+        "Cannot connect to server. Check the address and that the server is running."
+    } else if error.is_timeout() {
+        "Server request timed out. Check ECU status before retrying."
+    } else if details.contains("server request failed") {
+        "Connection lost. Check ECU status before retrying."
+    } else {
+        "Could not prepare the server request."
+    }
 }
 
 fn main() -> ExitCode {

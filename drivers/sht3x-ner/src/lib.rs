@@ -9,9 +9,9 @@ use defmt::bitflags;
 use embedded_hal_async::{delay::DelayNs, i2c::I2c};
 
 // 2.2 Timing Specification for the Sensor System
-// Table 4
+// Table 4: soft reset takes up to 1.5 ms; round up to 2 ms for margin.
 // TODO: Support longer times needed with lower voltage (Table 5).
-const SOFT_RESET_TIME_MS: u8 = 1;
+const SOFT_RESET_TIME_MS: u8 = 2;
 
 // 4: Operation and Communication
 const COMMAND_WAIT_TIME_MS: u8 = 1;
@@ -101,6 +101,24 @@ where
     /// Clear the status register.
     pub async fn clear_status<D: DelayNs>(&mut self, delay: &mut D) -> Result<(), Error<E>> {
         self.command(Command::ClearStatus, delay, None).await
+    }
+
+    /// Turn the internal heater on or off.
+    ///
+    /// The heater is intended for short pulses (datasheet section 4.10, ~1 s)
+    /// to clear condensation off the sensing element; leaving it enabled for
+    /// long periods biases the readings. The caller controls the duration.
+    pub async fn set_heater<D: DelayNs>(
+        &mut self,
+        enable: bool,
+        delay: &mut D,
+    ) -> Result<(), Error<E>> {
+        let command = if enable {
+            Command::HeaterEnable
+        } else {
+            Command::HeaterDisable
+        };
+        self.command(command, delay, None).await
     }
 }
 
